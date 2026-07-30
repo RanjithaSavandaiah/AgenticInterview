@@ -1,0 +1,49 @@
+<div class="hr-container">
+  <header class="glass header">
+    <div class="logo">HR Dashboard - Live Observation</div>
+    <div class="status">
+      <span class="recording-dot" *ngIf="store.status() === 'InProgress'"></span> 
+      {{ store.status() === 'InProgress' ? '1 Active Session' : '0 Active Sessions' }}
+    </div>
+  </header>
+
+  <main class="content">
+    <div class="left-pane glass">
+      <h2>Candidate: {{ store.candidateName() }}</h2>
+      <div class="metrics">
+        <div class="metric">
+          <span class="label">Current Score</span>
+          <span class="value">{{ store.currentScore() }}/100</span>
+        </div>
+        <div class="metric">
+          <span class="label">Confidence</span>
+          <span class="value">{{ store.confidence() }}</span>
+        </div>
+        <div class="metric warning">
+          <span class="label">Proctoring Flags</span>
+          <span class="value">{{ store.proctoringFlags() }} Flags</span>
+        </div>
+      </div>
+      
+      <h3>Live Transcript</h3>
+      <div class="transcript">
+        <p *ngFor="let msg of store.messages()"><strong>{{msg.sourceAgent}}:</strong> {{msg.content}}</p>
+        <p *ngIf="store.messages().length === 0"><em>No messages yet.</em></p>
+      </div>
+    </div>
+
+    <div class="right-pane glass">
+      <h3>Live Code View</h3>
+      <div class="code-view">
+        <pre><code>{{ store.candidateCode() }}</code></pre>
+      </div>
+      
+      <h3>AI Assessment Notes</h3>
+      <div class="assessment">
+        <p>{{ store.assessmentNotes() }}</p>
+      </div>
+      
+      <button class="terminate-btn">Terminate Interview</button>
+    </div>
+  </main>
+</div>

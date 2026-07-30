@@ -1,0 +1,12 @@
+<Solution>
+  <Project Path="../tests/AgenticInterview.AgenticSystem.Tests/AgenticInterview.AgenticSystem.Tests.csproj" />
+  <Project Path="../tests/AgenticInterview.Api.Tests/AgenticInterview.Api.Tests.csproj" />
+  <Project Path="../tests/AgenticInterview.Application.Tests/AgenticInterview.Application.Tests.csproj" />
+  <Project Path="../tests/AgenticInterview.Domain.Tests/AgenticInterview.Domain.Tests.csproj" />
+  <Project Path="../tests/AgenticInterview.Infrastructure.Tests/AgenticInterview.Infrastructure.Tests.csproj" />
+  <Project Path="AgenticInterview.AgenticSystem/AgenticInterview.AgenticSystem.csproj" />
+  <Project Path="AgenticInterview.Api/AgenticInterview.Api.csproj" />
+  <Project Path="AgenticInterview.Application/AgenticInterview.Application.csproj" />
+  <Project Path="AgenticInterview.Domain/AgenticInterview.Domain.csproj" />
+  <Project Path="AgenticInterview.Infrastructure/AgenticInterview.Infrastructure.csproj" />
+</Solution>

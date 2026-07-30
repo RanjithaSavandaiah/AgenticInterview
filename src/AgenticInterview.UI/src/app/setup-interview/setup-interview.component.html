@@ -1,0 +1,41 @@
+<div class="setup-container">
+  <div class="setup-card">
+    <h1>Agentic Interview Setup</h1>
+    <p class="subtitle">Upload the candidate's resume and the job description to start an autonomous interview.</p>
+    
+    <div class="error-message" *ngIf="errorMessage()">
+      {{ errorMessage() }}
+    </div>
+
+    <div class="upload-section">
+      <div class="upload-box">
+        <h3>1. Candidate Resume</h3>
+        <p>Upload a PDF or Word document containing the candidate's resume.</p>
+        <input type="file" id="resumeUpload" (change)="onFileSelected($event, 'resume')" accept=".pdf,.doc,.docx,.txt" class="file-input" />
+        <label for="resumeUpload" class="file-label">
+          <span class="icon">📄</span>
+          <span>{{ resumeFile()?.name || 'Select Resume' }}</span>
+        </label>
+      </div>
+
+      <div class="upload-box">
+        <h3>2. Job Description</h3>
+        <p>Upload the job description document for the role.</p>
+        <input type="file" id="jdUpload" (change)="onFileSelected($event, 'jd')" accept=".pdf,.doc,.docx,.txt" class="file-input" />
+        <label for="jdUpload" class="file-label">
+          <span class="icon">💼</span>
+          <span>{{ jdFile()?.name || 'Select Job Description' }}</span>
+        </label>
+      </div>
+    </div>
+
+    <button 
+      type="button"
+      class="start-button" 
+      [disabled]="isLoading() || !resumeFile() || !jdFile()" 
+      (click)="startInterview()">
+      <span *ngIf="!isLoading()">Start Interview Session</span>
+      <span *ngIf="isLoading()" class="spinner">⏳ Processing Documents...</span>
+    </button>
+  </div>
+</div>

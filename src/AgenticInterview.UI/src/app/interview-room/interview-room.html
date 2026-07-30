@@ -1,0 +1,77 @@
+<div class="interview-container">
+  <header class="glass header">
+    <div class="logo">Agentic Interview</div>
+    <div class="status">
+      <span class="recording-dot"></span> {{ store.status() === 'InProgress' ? 'Live Interview' : store.status() }}
+      <span class="timer" *ngIf="store.status() === 'InProgress'">{{ store.candidateName() }}</span>
+    </div>
+  </header>
+
+  <main class="content">
+    <div class="editor-pane glass">
+      <div class="pane-header">
+        <span>solution.cs</span>
+        <button class="run-btn" (click)="evaluateCode()">Submit & Evaluate</button>
+      </div>
+      <ngx-monaco-editor [options]="editorOptions" [ngModel]="store.candidateCode()" (ngModelChange)="store.setCandidateCode($event)" class="monaco-container"></ngx-monaco-editor>
+    </div>
+
+    <div class="interaction-pane glass">
+      <div class="video-section">
+        <div class="camera candidate-camera">
+          <video #candidateVideo autoplay muted playsinline [hidden]="!isCameraActive"></video>
+          <div class="placeholder" *ngIf="!isCameraActive">Camera Access Required</div>
+        </div>
+        <div class="camera agent-camera">
+          <div class="ai-avatar">
+            <div class="pulse"></div>
+            <span>AI Interviewer</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-section">
+        <div class="messages">
+          <div class="message agent" *ngIf="store.currentQuestion()">
+            <div class="sender">Current Question</div>
+            <div class="text">{{store.currentQuestion()}}</div>
+          </div>
+          
+          <div class="message" *ngFor="let msg of store.messages()" [ngClass]="msg.sourceAgent === 'System' ? 'candidate' : 'agent'">
+            <div class="sender">{{msg.sourceAgent}}</div>
+            <div class="text">{{msg.content}}</div>
+          </div>
+        </div>
+        <div class="input-area natural-voice">
+          <div class="voice-status" [class.listening]="isRecording" [class.agent-speaking]="store.isAgentSpeaking()">
+            <div class="pulse-ring"></div>
+            <span class="status-text">
+              {{ store.isAgentSpeaking() ? 'Agent is speaking...' : (isRecording ? 'Listening...' : 'Microphone Paused') }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+  
+  <div class="permission-overlay" *ngIf="!isInterviewReady">
+    <div class="overlay-card glass" *ngIf="!isCameraActive">
+      <h2>Camera & Microphone Required</h2>
+      <p>This is a proctored AI interview. You must allow access to your camera and microphone to begin the session.</p>
+      <button class="run-btn" (click)="requestPermissions()">Allow Access</button>
+    </div>
+    
+    <div class="overlay-card glass" *ngIf="isCameraActive">
+      <h2>You're all set!</h2>
+      <p>Camera and microphone are active. Click below when you are ready to begin.</p>
+      <button class="run-btn start-btn" (click)="startLiveInterview()">Start Interview</button>
+    </div>
+  </div>
+
+  <div class="permission-overlay" *ngIf="store.status() === 'Terminated'">
+    <div class="overlay-card glass" style="border: 2px solid #ef4444;">
+      <h2 style="color: #ef4444;">Interview Terminated</h2>
+      <p>This interview has been terminated due to repeated proctoring violations. The session is now closed.</p>
+    </div>
+  </div>
+</div>

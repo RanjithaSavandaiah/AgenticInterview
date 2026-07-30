@@ -1,0 +1,76 @@
+# ==========================================
+# AgenticInterview - .gitignore
+# ==========================================
+
+# --- .NET ---
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+.vs/
+project.lock.json
+*.nuget.props
+*.nuget.targets
+*.nupkg
+
+# --- Build Results ---
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# --- NuGet ---
+*.nupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+
+# --- Node / Angular ---
+node_modules/
+dist/
+.angular/
+.sass-cache/
+*.tsbuildinfo
+.env
+.env.local
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Test artifacts ---
+TestResults/
+coverage/
+*.trx
+
+# --- Gemini/Agent artifacts ---
+.gemini/
+.agents/
+
+# --- Misc ---
+*.log
+*.tmp
+test_*.txt
+test_*.py
+
+# --- Secrets / Local config (NEVER commit API keys) ---
+**/appsettings.Development.json
+**/appsettings.*.local.json
+*.pfx
+*.key

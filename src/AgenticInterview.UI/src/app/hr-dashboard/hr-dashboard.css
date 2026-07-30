@@ -1,0 +1,119 @@
+.hr-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 16px;
+  gap: 16px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 24px;
+  border-radius: 12px;
+}
+
+.logo {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: #3b82f6;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 500;
+}
+
+.recording-dot {
+  width: 10px;
+  height: 10px;
+  background-color: var(--success);
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+.content {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.left-pane, .right-pane {
+  flex: 1;
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.metrics {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.metric {
+  flex: 1;
+  background: rgba(0,0,0,0.3);
+  padding: 16px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+}
+
+.metric.warning {
+  border-color: var(--success);
+}
+
+.metric .label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.metric .value {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.transcript, .assessment {
+  background: rgba(0,0,0,0.2);
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  flex: 1;
+  overflow-y: auto;
+}
+
+.code-view {
+  background: #1e1e1e;
+  padding: 16px;
+  border-radius: 8px;
+  font-family: monospace;
+  border: 1px solid var(--border);
+}
+
+.terminate-btn {
+  background-color: var(--error);
+  color: white;
+  border: none;
+  padding: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  margin-top: auto;
+  transition: opacity 0.2s;
+}
+
+.terminate-btn:hover {
+  opacity: 0.8;
+}
