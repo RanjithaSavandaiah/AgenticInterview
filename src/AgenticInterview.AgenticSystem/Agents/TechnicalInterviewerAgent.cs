@@ -98,13 +98,58 @@ CRITICAL RULE 2: You MUST ALWAYS ask a question. NEVER answer technical concepts
             ? $"This is the very beginning of the interview. Greet {candidateName} by name, introduce yourself as the AI Interviewer, and ask an introductory question (e.g., 'Tell me about yourself and your background.')."
             : $"JD: {jobDescription}\nResume: {candidateResume}\n{(string.IsNullOrWhiteSpace(memoryContext) ? "" : $"\nRelevant context from previous interactions:\n{memoryContext}")}\n\nTranscript so far:\n{currentTranscript}";
 
-        // Use the MAF Agent Harness — automatic context compaction and tool orchestration
-        var response = await HarnessAgent.RunAsync(userPrompt, cancellationToken: cancellationToken);
-        var nextQuestion = response.Text?.Trim() ?? "[Could not generate question]";
-        
+        // Self-correcting loop: validates the LLM output is a proper interview question
+        var nextQuestion = await AgenticInterview.AgenticSystem.Core.SelfCorrectingLoop.ExecuteAsync(
+            action: async ctx =>
+            {
+                var prompt = ctx.IsFirstAttempt
+                    ? userPrompt
+                    : $"{userPrompt}\n\n--- CORRECTION REQUIRED ---\n{ctx.CorrectiveFeedback}";
+
+                var response = await HarnessAgent.RunAsync(prompt, cancellationToken: cancellationToken);
+                return response.Text?.Trim() ?? string.Empty;
+            },
+            validator: (output, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(output) || output == "[Could not generate question]")
+                    return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Invalid(
+                        "Output was empty or the degenerate fallback '[Could not generate question]'.");
+
+                if (!output.Contains('?'))
+                    return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Invalid(
+                        "Output does not contain a question mark. You MUST ask the candidate a question.");
+
+                return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Valid();
+            },
+            feedbackGenerator: (output, validationResult, _) =>
+            {
+                return $"Your previous output was not a valid interview question. Issue: {validationResult.FailureReason}\n" +
+                       $"Invalid output: \"{(output.Length > 150 ? output[..150] + "..." : output)}\"\n" +
+                       "You MUST ask the candidate a clear, specific interview question. Your response must contain at least one question mark.";
+            },
+            options: new AgenticInterview.AgenticSystem.Core.SelfCorrectionOptions
+            {
+                MaxAttempts = AgenticConstants.MaxSelfCorrectionAttempts,
+                RetryDelayMs = 500,
+                AgentName = Name,
+                SessionId = blackboard.SessionId.ToString()
+            },
+            Logger,
+            cancellationToken);
+
         Logger.LogInformation("Next technical question chosen: {Question}", nextQuestion);
         
-        // Use guardrailed output posting
-        PostGuardedOutput(blackboard, nextQuestion);
+        // Use guardrailed output posting with self-correction
+        await PostGuardedOutputWithCorrectionAsync(
+            blackboard,
+            nextQuestion,
+            async (feedback, ct) =>
+            {
+                var correctionPrompt = $"{userPrompt}\n\n--- GUARDRAIL CORRECTION ---\n{feedback}";
+                var response = await HarnessAgent.RunAsync(correctionPrompt, cancellationToken: ct);
+                return response.Text?.Trim() ?? string.Empty;
+            },
+            cancellationToken);
     }
 }
+

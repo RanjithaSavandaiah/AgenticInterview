@@ -91,14 +91,58 @@ CRITICAL RULE 1: You are roleplaying as the interviewer. You MUST ONLY output th
             ? $"This is the very beginning of the interview. Greet {candidateName} by name, introduce yourself as the AI Interviewer, and ask an introductory question (e.g., 'Tell me about yourself and your background.')."
             : $"JD: {jobDescription}\nResume: {candidateResume}\n{(string.IsNullOrWhiteSpace(memoryContext) ? "" : $"\nRelevant context from previous interactions:\n{memoryContext}")}\n\nTranscript so far:\n{currentTranscript}";
 
-        // Use the MAF Agent Harness — automatic context compaction and instruction merging
-        var response = await HarnessAgent.RunAsync(userPrompt, cancellationToken: cancellationToken);
-        
-        var nextQuestion = response.Text ?? string.Empty;
+        // Self-correcting loop: validates the LLM output is a proper behavioral question
+        var nextQuestion = await AgenticInterview.AgenticSystem.Core.SelfCorrectingLoop.ExecuteAsync(
+            action: async ctx =>
+            {
+                var prompt = ctx.IsFirstAttempt
+                    ? userPrompt
+                    : $"{userPrompt}\n\n--- CORRECTION REQUIRED ---\n{ctx.CorrectiveFeedback}";
+
+                var response = await HarnessAgent.RunAsync(prompt, cancellationToken: cancellationToken);
+                return response.Text?.Trim() ?? string.Empty;
+            },
+            validator: (output, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(output))
+                    return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Invalid(
+                        "Output was empty. You must generate a behavioral interview question.");
+
+                if (!output.Contains('?'))
+                    return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Invalid(
+                        "Output does not contain a question mark. You MUST ask the candidate a STAR-method behavioral question.");
+
+                return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Valid();
+            },
+            feedbackGenerator: (output, validationResult, _) =>
+            {
+                return $"Your previous output was not a valid behavioral interview question. Issue: {validationResult.FailureReason}\n" +
+                       $"Invalid output: \"{(output.Length > 150 ? output[..150] + "..." : output)}\"\n" +
+                       "You MUST ask the candidate a clear behavioral question using the STAR method. Your response must contain at least one question mark.";
+            },
+            options: new AgenticInterview.AgenticSystem.Core.SelfCorrectionOptions
+            {
+                MaxAttempts = AgenticConstants.MaxSelfCorrectionAttempts,
+                RetryDelayMs = 500,
+                AgentName = Name,
+                SessionId = blackboard.SessionId.ToString()
+            },
+            Logger,
+            cancellationToken);
         
         Logger.LogInformation("Next behavioral question chosen: {Question}", nextQuestion);
         
-        // Use guardrailed output posting
-        PostGuardedOutput(blackboard, nextQuestion);
+        // Use guardrailed output posting with self-correction
+        await PostGuardedOutputWithCorrectionAsync(
+            blackboard,
+            nextQuestion,
+            async (feedback, ct) =>
+            {
+                var correctionPrompt = $"{userPrompt}\n\n--- GUARDRAIL CORRECTION ---\n{feedback}";
+                var response = await HarnessAgent.RunAsync(correctionPrompt, cancellationToken: ct);
+                return response.Text?.Trim() ?? string.Empty;
+            },
+            cancellationToken);
     }
 }
+

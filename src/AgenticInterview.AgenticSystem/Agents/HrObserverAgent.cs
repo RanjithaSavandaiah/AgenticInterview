@@ -90,15 +90,66 @@ You have access to tools. If you decide to use a tool, ensure you provide all re
         if (string.IsNullOrWhiteSpace(currentTranscript))
             return;
 
-        // Use the MAF Agent Harness — instruction merging handles the system prompt,
-        // context compaction handles transcript overflow automatically
-        var response = await HarnessAgent.RunAsync(
-            $"Transcript so far:\n{currentTranscript}",
-            cancellationToken: cancellationToken);
-        
-        var summary = response.Text ?? string.Empty;
-        
+        var userPrompt = $"Transcript so far:\n{currentTranscript}";
+
+        // Self-correcting loop: validates the HR summary is concise and HR-focused
+        var summary = await AgenticInterview.AgenticSystem.Core.SelfCorrectingLoop.ExecuteAsync(
+            action: async ctx =>
+            {
+                var prompt = ctx.IsFirstAttempt
+                    ? userPrompt
+                    : $"{userPrompt}\n\n--- CORRECTION REQUIRED ---\n{ctx.CorrectiveFeedback}";
+
+                // Use the MAF Agent Harness — instruction merging handles the system prompt,
+                // context compaction handles transcript overflow automatically
+                var response = await HarnessAgent.RunAsync(prompt, cancellationToken: cancellationToken);
+                return response.Text?.Trim() ?? string.Empty;
+            },
+            validator: (output, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(output))
+                    return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Invalid(
+                        "Summary was empty. You must provide a 2-sentence HR-focused summary.");
+
+                // Count sentences (rough heuristic: split on sentence-ending punctuation)
+                var sentenceCount = output.Split(new[] { '.', '!', '?' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Count(s => s.Trim().Length > 5);
+
+                if (sentenceCount > 5)
+                    return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Invalid(
+                        $"Summary is too long ({sentenceCount} sentences). Provide ONLY a 2-sentence summary.");
+
+                // Check for technical evaluation language that indicates scope creep
+                var technicalPatterns = new[] { "algorithm", "time complexity", "big-o", "data structure", "code review", "syntax error" };
+                foreach (var pattern in technicalPatterns)
+                {
+                    if (output.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+                        return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Invalid(
+                            $"Summary contains technical evaluation language ('{pattern}'). " +
+                            "Focus ONLY on HR-related traits: soft skills, communication, and demeanor.");
+                }
+
+                return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Valid();
+            },
+            feedbackGenerator: (output, validationResult, _) =>
+            {
+                return $"Your previous HR summary failed quality validation. Issue: {validationResult.FailureReason}\n" +
+                       $"Invalid summary: \"{(output.Length > 200 ? output[..200] + "..." : output)}\"\n" +
+                       "RULES: Provide ONLY a 2-sentence summary. Focus ONLY on soft skills, communication, and overall demeanor. " +
+                       "Do NOT evaluate technical accuracy. Do NOT include filler phrases like 'Based on the transcript'.";
+            },
+            options: new AgenticInterview.AgenticSystem.Core.SelfCorrectionOptions
+            {
+                MaxAttempts = AgenticConstants.MaxSelfCorrectionAttempts,
+                RetryDelayMs = 500,
+                AgentName = Name,
+                SessionId = blackboard.SessionId.ToString()
+            },
+            Logger,
+            cancellationToken);
+
         Logger.LogInformation("HR Summary updated: {Summary}", summary);
         blackboard.Set(AgenticConstants.HrSummaryKey, summary);
     }
 }
+

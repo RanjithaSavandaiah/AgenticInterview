@@ -71,7 +71,7 @@ public class HrDashboardHubTests
         // Verify SignalR SendAsync was called. SendAsync is an extension method over SendCoreAsync.
         _clientProxyMock.Verify(c => c.SendCoreAsync(
             "ReceiveUpdate", 
-            It.Is<object[]>(args => args.Length == 2 && args[0].ToString() == sessionId.ToString() && args[1].ToString().Contains("StatusChanged")), 
+            It.Is<object[]>(args => args.Length == 2 && args[0].ToString() == sessionId.ToString() && (args[1].ToString() ?? string.Empty).Contains("StatusChanged")), 
             It.IsAny<CancellationToken>()), Times.Once);
     }
 }

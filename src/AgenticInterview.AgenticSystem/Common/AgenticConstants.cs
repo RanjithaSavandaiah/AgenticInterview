@@ -46,6 +46,38 @@ public static class AgenticConstants
     public const int DefaultInterviewDurationMinutes = 60;
     public const int MaxProctoringStrikes = 3;
 
+    // --- Self-Correcting Loop Constants ---
+    /// <summary>
+    /// Maximum number of self-correction attempts per agent per cycle (including initial attempt).
+    /// Each correction attempt = 1 additional LLM call, so this bounds cost/latency.
+    /// </summary>
+    public const int MaxSelfCorrectionAttempts = 3;
+
+    /// <summary>
+    /// Maximum number of orchestration cycles a goal can remain active before being force-advanced.
+    /// Prevents infinite loops where agents keep running in the same phase.
+    /// At 1s/cycle, 20 cycles = ~20 seconds of stall tolerance.
+    /// </summary>
+    public const int MaxGoalStallCycles = 20;
+
+    /// <summary>
+    /// Maximum number of session-level transient failure retries in the background service.
+    /// </summary>
+    public const int MaxSessionRetries = 2;
+
+    /// <summary>
+    /// Base delay in milliseconds for session-level retry exponential backoff.
+    /// Actual delay = BaseSessionRetryDelayMs * 2^(attempt-1).
+    /// </summary>
+    public const int BaseSessionRetryDelayMs = 5000;
+
+    // --- Self-Correcting Loop Blackboard Keys ---
+    /// <summary>
+    /// Blackboard key prefix for tracking how many orchestration cycles a goal has been active.
+    /// Append the goal ID: e.g., "GoalCycleCount_goal-technical".
+    /// </summary>
+    public const string GoalCycleCountKeyPrefix = "GoalCycleCount_";
+
     // --- Session Statuses ---
     public const string StatusCompleted = "Completed";
     public const string StatusTerminated = "Terminated";

@@ -83,32 +83,65 @@ public class InterviewOrchestrator
 
             var stopwatch = Stopwatch.StartNew();
 
-            try
+            // Self-correcting retry loop: retry failed agents with exponential backoff
+            for (int retryAttempt = 1; retryAttempt <= AgenticConstants.MaxAgentRetries; retryAttempt++)
             {
-                _logger.LogInformation("Executing agent: {AgentName}", agent.Name);
-                AgentMetrics.AgentInvocations.Add(1,
-                    new KeyValuePair<string, object?>("agent.name", agent.Name));
+                if (cancellationToken.IsCancellationRequested)
+                    break;
 
-                await agent.ExecuteAsync(blackboard, cancellationToken);
+                try
+                {
+                    _logger.LogInformation("Executing agent: {AgentName} (attempt {Attempt}/{MaxAttempts})",
+                        agent.Name, retryAttempt, AgenticConstants.MaxAgentRetries);
+                    AgentMetrics.AgentInvocations.Add(1,
+                        new KeyValuePair<string, object?>("agent.name", agent.Name));
 
-                stopwatch.Stop();
-                AgentMetrics.AgentExecutionDuration.Record(stopwatch.Elapsed.TotalMilliseconds,
-                    new KeyValuePair<string, object?>("agent.name", agent.Name),
-                    new KeyValuePair<string, object?>("status", "success"));
+                    await agent.ExecuteAsync(blackboard, cancellationToken);
 
-                _logger.LogInformation("Agent {AgentName} completed in {ElapsedMs}ms.", agent.Name, stopwatch.Elapsed.TotalMilliseconds);
-            }
-            catch (Exception ex)
-            {
-                stopwatch.Stop();
-                AgentMetrics.AgentExecutionDuration.Record(stopwatch.Elapsed.TotalMilliseconds,
-                    new KeyValuePair<string, object?>("agent.name", agent.Name),
-                    new KeyValuePair<string, object?>("status", "error"));
+                    stopwatch.Stop();
+                    AgentMetrics.AgentExecutionDuration.Record(stopwatch.Elapsed.TotalMilliseconds,
+                        new KeyValuePair<string, object?>("agent.name", agent.Name),
+                        new KeyValuePair<string, object?>("status", "success"));
 
-                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                _logger.LogError(ex, "Agent {AgentName} failed during execution. It will retry on the next cycle.", agent.Name);
-                // Do not post the error to the blackboard, as it breaks the interview immersion
-                // and deadlocks the conversation by changing the lastMessage.SourceAgent.
+                    _logger.LogInformation("Agent {AgentName} completed in {ElapsedMs}ms.",
+                        agent.Name, stopwatch.Elapsed.TotalMilliseconds);
+                    break; // Success — exit retry loop
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // Don't retry cancellation
+                }
+                catch (Exception ex)
+                {
+                    stopwatch.Stop();
+                    AgentMetrics.AgentExecutionDuration.Record(stopwatch.Elapsed.TotalMilliseconds,
+                        new KeyValuePair<string, object?>("agent.name", agent.Name),
+                        new KeyValuePair<string, object?>("status", "error"));
+
+                    if (retryAttempt < AgenticConstants.MaxAgentRetries)
+                    {
+                        var backoffMs = (int)Math.Pow(2, retryAttempt - 1) * 1000; // 1s, 2s
+                        _logger.LogWarning(ex,
+                            "Agent {AgentName} failed on attempt {Attempt}/{MaxAttempts}. Retrying in {BackoffMs}ms.",
+                            agent.Name, retryAttempt, AgenticConstants.MaxAgentRetries, backoffMs);
+                        AgentMetrics.SelfCorrectionAttempts.Add(1,
+                            new KeyValuePair<string, object?>("agent.name", agent.Name),
+                            new KeyValuePair<string, object?>("attempt", retryAttempt));
+                        await Task.Delay(backoffMs, cancellationToken);
+                        stopwatch.Restart(); // Reset timer for retry
+                    }
+                    else
+                    {
+                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                        _logger.LogError(ex,
+                            "Agent {AgentName} exhausted all {MaxAttempts} retry attempts. Moving to next agent.",
+                            agent.Name, AgenticConstants.MaxAgentRetries);
+                        AgentMetrics.SelfCorrectionExhausted.Add(1,
+                            new KeyValuePair<string, object?>("agent.name", agent.Name));
+                        // Do not post the error to the blackboard, as it breaks the interview immersion
+                        // and deadlocks the conversation by changing the lastMessage.SourceAgent.
+                    }
+                }
             }
         }
 
@@ -210,10 +243,19 @@ public class InterviewOrchestrator
     /// <summary>
     /// Checks if the current goal's completion conditions are met and advances to the next goal.
     /// Uses a simple heuristic: count candidate responses to estimate phase progress.
+    /// Also implements goal stall detection: if a goal has been active for too many cycles
+    /// without advancing, it is force-advanced to prevent infinite loops.
     /// </summary>
     private void AdvanceGoalIfCompleted(InterviewBlackboard blackboard, InterviewGoal? currentGoal)
     {
         if (currentGoal == null) return;
+
+        // --- Goal Stall Detection ---
+        // Track how many cycles this goal has been active
+        var cycleCountKey = $"{AgenticConstants.GoalCycleCountKeyPrefix}{currentGoal.Id}";
+        var currentCycleCount = blackboard.Get<int>(cycleCountKey);
+        currentCycleCount++;
+        blackboard.Set(cycleCountKey, currentCycleCount);
 
         var messagesLog = blackboard.GetMessages();
         var candidateResponseCount = messagesLog.Count(m => m.SourceAgent == AgenticConstants.CandidateSourceName);
@@ -229,9 +271,21 @@ public class InterviewOrchestrator
             _ => false
         };
 
+        // Self-correcting stall detection: force-advance if stuck for too many cycles
+        if (!shouldAdvance && currentCycleCount >= AgenticConstants.MaxGoalStallCycles)
+        {
+            _logger.LogWarning(
+                "Goal '{GoalName}' has been active for {CycleCount} cycles (max: {MaxCycles}). " +
+                "Force-advancing to prevent infinite loop. This may indicate agents are not producing " +
+                "expected outputs or the candidate is unresponsive.",
+                currentGoal.Name, currentCycleCount, AgenticConstants.MaxGoalStallCycles);
+            shouldAdvance = true;
+        }
+
         if (shouldAdvance)
         {
             blackboard.Set(currentGoal.CompletionKey, "true");
+            blackboard.Set(cycleCountKey, 0); // Reset cycle counter for this goal
             _logger.LogInformation("Goal '{GoalName}' marked as completed. Advancing to next phase.", currentGoal.Name);
         }
     }

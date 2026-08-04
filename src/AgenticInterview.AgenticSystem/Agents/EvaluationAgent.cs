@@ -64,10 +64,54 @@ Do NOT output the scores in your text response. JUST call the tool.
 Transcript:
 {transcript}";
 
-        // Use the MAF Agent Harness — it handles the multi-turn tool-calling loop for submit_final_score
-        var response = await HarnessAgent.RunAsync(userPrompt, cancellationToken: cancellationToken);
-        var responseText = response.Text ?? string.Empty;
-        
-        Logger.LogInformation("Evaluation result:\n{Result}", responseText);
+        // Self-correcting loop: validates that the tool was actually invoked
+        // The LLM sometimes outputs scores as plain text instead of calling the tool
+        await AgenticInterview.AgenticSystem.Core.SelfCorrectingLoop.ExecuteAsync(
+            action: async ctx =>
+            {
+                var prompt = ctx.IsFirstAttempt
+                    ? userPrompt
+                    : $"{userPrompt}\n\n--- CORRECTION REQUIRED ---\n{ctx.CorrectiveFeedback}";
+
+                var response = await HarnessAgent.RunAsync(prompt, cancellationToken: cancellationToken);
+                return response.Text ?? string.Empty;
+            },
+            validator: (responseText, _) =>
+            {
+                // If the response contains score patterns in plain text, the LLM likely
+                // skipped tool use and just wrote the scores as text
+                var hasPlainTextScores = System.Text.RegularExpressions.Regex.IsMatch(
+                    responseText,
+                    @"(technical\s*score|behavioral\s*score|score\s*:\s*\d+)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                if (hasPlainTextScores && responseText.Length > 50)
+                {
+                    return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Invalid(
+                        "You output scores as plain text instead of calling the 'submit_final_score' tool. " +
+                        "You MUST call the tool — do NOT write scores in your response text.");
+                }
+
+                return AgenticInterview.AgenticSystem.Core.SelfCorrectionValidationResult.Valid();
+            },
+            feedbackGenerator: (_, validationResult, _) =>
+            {
+                return $"CRITICAL: {validationResult.FailureReason}\n" +
+                       "You MUST use the 'submit_final_score' tool with parameters: " +
+                       $"sessionId='{blackboard.SessionId}', technicalScore (0-100), behavioralScore (0-100), recommendation (string).\n" +
+                       "Call the tool NOW. Do NOT output any scores as text.";
+            },
+            options: new AgenticInterview.AgenticSystem.Core.SelfCorrectionOptions
+            {
+                MaxAttempts = AgenticConstants.MaxSelfCorrectionAttempts,
+                RetryDelayMs = 500,
+                AgentName = Name,
+                SessionId = blackboard.SessionId.ToString()
+            },
+            Logger,
+            cancellationToken);
+
+        Logger.LogInformation("Evaluation agent completed with self-correction.");
     }
 }
+

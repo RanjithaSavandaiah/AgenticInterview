@@ -9,7 +9,7 @@ public class IdempotencyHeaderOperationFilter : IOperationFilter
 {
     public void Apply(OpenApiOperation operation, OperationFilterContext context)
     {
-        var hasIdempotentAttribute = context.MethodInfo.DeclaringType.GetCustomAttributes(true)
+        var hasIdempotentAttribute = (context.MethodInfo.DeclaringType?.GetCustomAttributes(true) ?? Array.Empty<object>())
             .Union(context.MethodInfo.GetCustomAttributes(true))
             .OfType<IdempotentAttribute>()
             .Any();

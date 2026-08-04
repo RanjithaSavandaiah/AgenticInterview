@@ -191,4 +191,72 @@ public abstract class BaseAgent : IAgent
             blackboard.AddMessage(new BlackboardMessage(Name, sanitizedOutput, DateTime.UtcNow));
         }
     }
+
+    /// <summary>
+    /// Self-correcting variant of <see cref="PostGuardedOutput"/> that re-prompts the LLM
+    /// when guardrails reject the output. Instead of silently dropping rejected output,
+    /// this method generates corrective feedback and retries up to <see cref="AgenticConstants.MaxSelfCorrectionAttempts"/> times.
+    /// 
+    /// Agents should call this instead of <see cref="PostGuardedOutput"/> when they want
+    /// self-healing behavior on guardrail rejections.
+    /// </summary>
+    /// <param name="blackboard">The interview blackboard.</param>
+    /// <param name="initialOutput">The initial LLM output to validate.</param>
+    /// <param name="regenerate">
+    /// An async function that takes corrective feedback and returns a new LLM output.
+    /// Called on each retry with specific instructions about what to fix.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    protected async Task PostGuardedOutputWithCorrectionAsync(
+        InterviewBlackboard blackboard,
+        string initialOutput,
+        Func<string, CancellationToken, Task<string>> regenerate,
+        CancellationToken cancellationToken = default)
+    {
+        var sessionId = blackboard.SessionId.ToString();
+        var finalOutput = await SelfCorrectingLoop.ExecuteAsync(
+            action: async ctx =>
+            {
+                if (ctx.IsFirstAttempt)
+                    return initialOutput;
+
+                // Re-prompt the LLM with corrective feedback
+                Logger.LogInformation(
+                    "Agent {AgentName} re-prompting (attempt {Attempt}/{Max}) with correction: {Feedback}",
+                    Name, ctx.AttemptNumber, ctx.MaxAttempts, ctx.CorrectiveFeedback);
+
+                return await regenerate(ctx.CorrectiveFeedback!, cancellationToken);
+            },
+            validator: (output, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(output))
+                    return SelfCorrectionValidationResult.Invalid("Output was empty or whitespace.");
+
+                var guardrailResult = Guardrails.ValidateOutput(Name, output, sessionId);
+                if (!guardrailResult.IsAccepted)
+                    return SelfCorrectionValidationResult.Invalid(
+                        $"Guardrail rejection: {guardrailResult.RejectionReason}");
+
+                return SelfCorrectionValidationResult.Valid();
+            },
+            feedbackGenerator: (output, validationResult, _) =>
+            {
+                return $"Your previous output was rejected. Reason: {validationResult.FailureReason}\n" +
+                       $"Rejected output (DO NOT repeat this): \"{(output.Length > 200 ? output[..200] + "..." : output)}\"\n" +
+                       "Please regenerate your response while avoiding the issue described above.";
+            },
+            options: new SelfCorrectionOptions
+            {
+                MaxAttempts = AgenticConstants.MaxSelfCorrectionAttempts,
+                RetryDelayMs = 500,
+                AgentName = Name,
+                SessionId = sessionId
+            },
+            Logger,
+            cancellationToken);
+
+        // Post the final output (may still be invalid if all retries exhausted — PostGuardedOutput handles that)
+        PostGuardedOutput(blackboard, finalOutput);
+    }
 }
+

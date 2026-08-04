@@ -77,7 +77,7 @@ public class CachedChatClientDecorator : IChatClient
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> chatMessages,
         ChatOptions? options = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
     {
         // Streaming responses are not cached — they are consumed incrementally
         // and caching them would require buffering the entire stream, negating the benefit.

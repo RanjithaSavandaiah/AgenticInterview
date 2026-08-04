@@ -53,6 +53,29 @@ public static class AgentMetrics
     public static readonly Counter<long> AiFallbacks =
         Meter.CreateCounter<long>("ai.fallbacks", "events", "Total AI fallback activations");
 
+    // --- Self-Correcting Loop Metrics ---
+
+    /// <summary>
+    /// Total number of self-correction loop iterations across all agents.
+    /// Tagged with agent.name and attempt number for per-agent analysis.
+    /// </summary>
+    public static readonly Counter<long> SelfCorrectionAttempts =
+        Meter.CreateCounter<long>("agent.self_correction.attempts", "attempts", "Total self-correction loop iterations");
+
+    /// <summary>
+    /// Corrections that produced valid output after a prior validation failure.
+    /// A high count indicates agents are successfully self-healing.
+    /// </summary>
+    public static readonly Counter<long> SelfCorrectionSuccesses =
+        Meter.CreateCounter<long>("agent.self_correction.successes", "corrections", "Successful self-corrections after prior failure");
+
+    /// <summary>
+    /// Self-correcting loops that exhausted all retries without producing valid output.
+    /// A high count indicates prompts or validators need tuning.
+    /// </summary>
+    public static readonly Counter<long> SelfCorrectionExhausted =
+        Meter.CreateCounter<long>("agent.self_correction.exhausted", "exhaustions", "Self-correction loops that exhausted all retries");
+
     /// <summary>
     /// Activity source for distributed tracing of agent execution.
     /// </summary>

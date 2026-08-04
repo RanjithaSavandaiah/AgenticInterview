@@ -98,50 +98,107 @@ public class InterviewBackgroundService : BackgroundService
 
         try
         {
-            using var scope = _scopeFactory.CreateScope();
-
-            var orchestrator = scope.ServiceProvider.GetRequiredService<InterviewOrchestrator>();
-            var blackboardManager = scope.ServiceProvider.GetRequiredService<IBlackboardManager>();
-            var blackboard = blackboardManager.GetOrCreate(sessionId);
-
-            // Load contextual data into the blackboard for the agents
-            var sessionRepo = scope.ServiceProvider.GetRequiredService<Domain.Interfaces.IRepository<Domain.Entities.InterviewSession>>();
-            var candidateRepo = scope.ServiceProvider.GetRequiredService<Domain.Interfaces.IRepository<Domain.Entities.CandidateProfile>>();
-            var jdRepo = scope.ServiceProvider.GetRequiredService<Domain.Interfaces.IRepository<Domain.Entities.JobDescriptionProfile>>();
-
-            var session = await sessionRepo.GetByIdAsync(sessionId);
-            if (session != null)
+            for (int attempt = 1; attempt <= Common.AgenticConstants.MaxSessionRetries + 1; attempt++)
             {
-                var candidate = await candidateRepo.GetByIdAsync(session.CandidateProfileId);
-                var jd = await jdRepo.GetByIdAsync(session.JobDescriptionId);
-
-                if (candidate != null)
+                try
                 {
-                    blackboard.Set(Common.AgenticConstants.CandidateResumeTextKey, candidate.ResumeTextContent);
-                    blackboard.Set(Common.AgenticConstants.CandidateNameKey, candidate.Name);
+                    using var scope = _scopeFactory.CreateScope();
+
+                    var orchestrator = scope.ServiceProvider.GetRequiredService<InterviewOrchestrator>();
+                    var blackboardManager = scope.ServiceProvider.GetRequiredService<IBlackboardManager>();
+                    var blackboard = blackboardManager.GetOrCreate(sessionId);
+
+                    // Load contextual data into the blackboard for the agents
+                    var sessionRepo = scope.ServiceProvider.GetRequiredService<Domain.Interfaces.IRepository<Domain.Entities.InterviewSession>>();
+                    var candidateRepo = scope.ServiceProvider.GetRequiredService<Domain.Interfaces.IRepository<Domain.Entities.CandidateProfile>>();
+                    var jdRepo = scope.ServiceProvider.GetRequiredService<Domain.Interfaces.IRepository<Domain.Entities.JobDescriptionProfile>>();
+
+                    var session = await sessionRepo.GetByIdAsync(sessionId);
+                    if (session != null)
+                    {
+                        var candidate = await candidateRepo.GetByIdAsync(session.CandidateProfileId);
+                        var jd = await jdRepo.GetByIdAsync(session.JobDescriptionId);
+
+                        if (candidate != null)
+                        {
+                            blackboard.Set(Common.AgenticConstants.CandidateResumeTextKey, candidate.ResumeTextContent);
+                            blackboard.Set(Common.AgenticConstants.CandidateNameKey, candidate.Name);
+                        }
+                        if (jd != null) blackboard.Set(Common.AgenticConstants.JobDescriptionKey, jd.DescriptionTextContent);
+                    }
+
+                    await orchestrator.RunFullInterviewAsync(blackboard, cancellationToken);
+
+                    _logger.LogInformation("Interview orchestration completed for session {SessionId}.", sessionId);
+                    return; // Success — exit retry loop
                 }
-                if (jd != null) blackboard.Set(Common.AgenticConstants.JobDescriptionKey, jd.DescriptionTextContent);
+                catch (OperationCanceledException)
+                {
+                    _logger.LogInformation("Interview session {SessionId} was cancelled.", sessionId);
+                    return; // Cancellation is intentional — don't retry
+                }
+                catch (Exception ex) when (IsTransientError(ex) && attempt <= Common.AgenticConstants.MaxSessionRetries)
+                {
+                    // Transient error — retry with exponential backoff
+                    var backoffMs = Common.AgenticConstants.BaseSessionRetryDelayMs * (int)Math.Pow(2, attempt - 1);
+                    _logger.LogWarning(ex,
+                        "Transient failure in session {SessionId} on attempt {Attempt}/{MaxAttempts}. " +
+                        "Retrying in {BackoffMs}ms.",
+                        sessionId, attempt, Common.AgenticConstants.MaxSessionRetries + 1, backoffMs);
+
+                    Common.AgentMetrics.SelfCorrectionAttempts.Add(1,
+                        new KeyValuePair<string, object?>("agent.name", "SessionOrchestration"),
+                        new KeyValuePair<string, object?>("attempt", attempt));
+
+                    await Task.Delay(backoffMs, cancellationToken);
+                    // Loop continues to next attempt with a fresh DI scope
+                }
+                catch (Exception ex)
+                {
+                    // Permanent/non-transient error or final attempt — give up
+                    _logger.LogError(ex, "Failed to run agentic loop for session {SessionId} (attempt {Attempt}). No more retries.",
+                        sessionId, attempt);
+
+                    if (attempt > 1)
+                    {
+                        Common.AgentMetrics.SelfCorrectionExhausted.Add(1,
+                            new KeyValuePair<string, object?>("agent.name", "SessionOrchestration"));
+                    }
+                    return;
+                }
             }
 
-            await orchestrator.RunFullInterviewAsync(blackboard, cancellationToken);
-
-            _logger.LogInformation("Interview orchestration completed for session {SessionId}.", sessionId);
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.LogInformation("Interview session {SessionId} was cancelled.", sessionId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to run agentic loop for session {SessionId}.", sessionId);
+            // Should not reach here, but log defensively
+            _logger.LogError("Session {SessionId} exhausted all retry attempts.", sessionId);
         }
         finally
         {
+            // Always clean up the running session entry regardless of outcome
             if (_runningSessions.TryRemove(sessionId, out var cts))
             {
                 cts.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Heuristic to determine if an exception represents a transient failure
+    /// that is worth retrying (network issues, LLM provider 5xx/429 errors).
+    /// </summary>
+    private static bool IsTransientError(Exception ex)
+    {
+        var message = ex.ToString();
+        return message.Contains("429", StringComparison.Ordinal) ||
+               message.Contains("500", StringComparison.Ordinal) ||
+               message.Contains("502", StringComparison.Ordinal) ||
+               message.Contains("503", StringComparison.Ordinal) ||
+               message.Contains("504", StringComparison.Ordinal) ||
+               message.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+               ex is System.Net.Http.HttpRequestException ||
+               ex is TimeoutException ||
+               ex is System.IO.IOException;
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
