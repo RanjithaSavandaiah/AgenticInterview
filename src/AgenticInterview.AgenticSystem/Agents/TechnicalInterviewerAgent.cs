@@ -22,8 +22,9 @@ public class TechnicalInterviewerAgent : BaseAgent
         IConversationMemoryStore memoryStore,
         AgentGuardrails guardrails,
         AgenticInterview.AgenticSystem.Core.AgentToolResolver toolResolver,
-        System.IServiceProvider serviceProvider) 
-        : base(AgenticConstants.TechnicalInterviewerName, "Asks coding/system design questions, generates challenges.", chatClient, logger, tools, memoryStore, guardrails, toolResolver, serviceProvider)
+        System.IServiceProvider serviceProvider,
+        AgenticInterview.AgenticSystem.Core.SubAgentDelegator delegator) 
+        : base(AgenticConstants.TechnicalInterviewerName, "Asks coding/system design questions, generates challenges.", chatClient, logger, tools, memoryStore, guardrails, toolResolver, serviceProvider, delegator)
     {
     }
 
@@ -92,11 +93,48 @@ CRITICAL RULE 2: You MUST ALWAYS ask a question. NEVER answer technical concepts
         // Build memory context from previous interactions
         var memoryContext = string.Join("\n", relevantMemories);
 
+        // --- Sub-Agent Delegation: Code Review ---
+        // If the candidate has submitted code, delegate to CodeExecution for static analysis
+        // and incorporate the feedback into the next question prompt.
+        var codeReviewContext = string.Empty;
+        var candidateCode = blackboard.Get<string>(AgenticConstants.CandidateCodeKey) ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(candidateCode))
+        {
+            var lastCodeReviewHash = blackboard.Get<string>($"{Name}_LastCodeReviewHash") ?? string.Empty;
+            var currentCodeHash = candidateCode.GetHashCode().ToString();
+
+            // Only delegate if the code has changed since the last review
+            if (currentCodeHash != lastCodeReviewHash)
+            {
+                Logger.LogInformation("Candidate code detected — delegating to Code Execution sub-agent for review.");
+
+                var codeReviewResult = await DelegateToSubAgentAsync(
+                    AgenticConstants.CodeExecutionAgentName,
+                    $"Analyze the following candidate-submitted code for correctness, quality, and potential issues. " +
+                    $"Provide a brief summary suitable for the interviewer to reference when asking a follow-up question.\n\n" +
+                    $"Code:\n```\n{candidateCode}\n```",
+                    blackboard,
+                    cancellationToken);
+
+                if (codeReviewResult.Success && !string.IsNullOrWhiteSpace(codeReviewResult.Output))
+                {
+                    codeReviewContext = $"\n\nCode Review Feedback (from Code Execution sub-agent, {codeReviewResult.DurationMs:F0}ms):\n{codeReviewResult.Output}";
+                    Logger.LogInformation("Code review delegation succeeded in {DurationMs}ms.", codeReviewResult.DurationMs);
+                }
+                else if (!codeReviewResult.Success)
+                {
+                    Logger.LogWarning("Code review delegation failed: {Error}. Proceeding without code feedback.", codeReviewResult.ErrorMessage);
+                }
+
+                blackboard.Set($"{Name}_LastCodeReviewHash", currentCodeHash);
+            }
+        }
+
         // Build the user prompt with dynamic context — the harness handles instruction merging
         // with the system prompt defined in GetHarnessOptions()
         var userPrompt = string.IsNullOrWhiteSpace(currentTranscript)
             ? $"This is the very beginning of the interview. Greet {candidateName} by name, introduce yourself as the AI Interviewer, and ask an introductory question (e.g., 'Tell me about yourself and your background.')."
-            : $"JD: {jobDescription}\nResume: {candidateResume}\n{(string.IsNullOrWhiteSpace(memoryContext) ? "" : $"\nRelevant context from previous interactions:\n{memoryContext}")}\n\nTranscript so far:\n{currentTranscript}";
+            : $"JD: {jobDescription}\nResume: {candidateResume}\n{(string.IsNullOrWhiteSpace(memoryContext) ? "" : $"\nRelevant context from previous interactions:\n{memoryContext}")}{codeReviewContext}\n\nTranscript so far:\n{currentTranscript}";
 
         // Self-correcting loop: validates the LLM output is a proper interview question
         var nextQuestion = await AgenticInterview.AgenticSystem.Core.SelfCorrectingLoop.ExecuteAsync(

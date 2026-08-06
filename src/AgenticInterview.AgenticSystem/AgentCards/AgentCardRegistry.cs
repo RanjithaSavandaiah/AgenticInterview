@@ -63,7 +63,8 @@ public class AgentCardRegistry
                 new AgentSkill { Id = "ask-technical-question", Name = "Ask Technical Question", Description = "Generates context-aware technical questions.", Tags = ["interview", "technical", "coding"] },
                 new AgentSkill { Id = "adaptive-difficulty", Name = "Adaptive Difficulty", Description = "Adjusts question difficulty based on candidate performance.", Tags = ["adaptive", "ai"] }
             ],
-            SupportsStreaming = true
+            SupportsStreaming = true,
+            CanDelegateTo = ["code-execution", "web-search"]
         });
 
         registry.Register(new AgentCard
@@ -111,7 +112,8 @@ public class AgentCardRegistry
             Skills =
             [
                 new AgentSkill { Id = "score-aggregation", Name = "Score Aggregation", Description = "Compiles scores from all agents into a final assessment.", Tags = ["evaluation", "scoring"] }
-            ]
+            ],
+            CanDelegateTo = ["code-execution", "hr-observer"]
         });
 
         registry.Register(new AgentCard
@@ -123,7 +125,8 @@ public class AgentCardRegistry
             Skills =
             [
                 new AgentSkill { Id = "orchestration", Name = "Agent Orchestration", Description = "Manages turn-taking and transitions between agents.", Tags = ["orchestration", "moderation"] }
-            ]
+            ],
+            CanDelegateTo = ["technical-interviewer", "behavioral-interviewer"]
         });
 
         registry.Register(new AgentCard

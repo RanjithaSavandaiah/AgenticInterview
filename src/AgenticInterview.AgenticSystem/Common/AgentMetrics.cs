@@ -76,6 +76,22 @@ public static class AgentMetrics
     public static readonly Counter<long> SelfCorrectionExhausted =
         Meter.CreateCounter<long>("agent.self_correction.exhausted", "exhaustions", "Self-correction loops that exhausted all retries");
 
+    // --- Sub-Agent Delegation Metrics ---
+
+    /// <summary>
+    /// Total number of sub-agent delegations. Tagged with parent.name and sub.name
+    /// for analyzing delegation patterns between agents.
+    /// </summary>
+    public static readonly Counter<long> SubAgentDelegations =
+        Meter.CreateCounter<long>("agent.sub_agent.delegations", "delegations", "Total sub-agent delegations");
+
+    /// <summary>
+    /// Duration of sub-agent execution in milliseconds. Tagged with parent.name,
+    /// sub.name, and status (success/error) for latency analysis.
+    /// </summary>
+    public static readonly Histogram<double> SubAgentDuration =
+        Meter.CreateHistogram<double>("agent.sub_agent.duration", "ms", "Sub-agent execution duration in milliseconds");
+
     /// <summary>
     /// Activity source for distributed tracing of agent execution.
     /// </summary>

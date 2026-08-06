@@ -49,6 +49,12 @@ public abstract class BaseAgent : IAgent
     /// </summary>
     protected readonly ChatClientAgent HarnessAgent;
 
+    /// <summary>
+    /// Optional sub-agent delegator for spawning child agents within this agent's execution.
+    /// Nullable to maintain backward compatibility with unit tests that construct agents without DI.
+    /// </summary>
+    protected readonly SubAgentDelegator? Delegator;
+
     protected BaseAgent(
         string name,
         string goal,
@@ -58,7 +64,8 @@ public abstract class BaseAgent : IAgent
         IConversationMemoryStore memoryStore,
         AgentGuardrails guardrails,
         AgentToolResolver? toolResolver = null,
-        IServiceProvider? serviceProvider = null)
+        IServiceProvider? serviceProvider = null,
+        SubAgentDelegator? delegator = null)
     {
         Name = name;
         Goal = goal;
@@ -66,6 +73,7 @@ public abstract class BaseAgent : IAgent
         Logger = logger;
         MemoryStore = memoryStore;
         Guardrails = guardrails;
+        Delegator = delegator;
 
         // Resolve per-agent tools via skill mapping if resolver is available.
         // This ensures each agent only gets the MCP tools matching its agent card skills.
@@ -257,6 +265,52 @@ public abstract class BaseAgent : IAgent
 
         // Post the final output (may still be invalid if all retries exhausted — PostGuardedOutput handles that)
         PostGuardedOutput(blackboard, finalOutput);
+    }
+
+    /// <summary>
+    /// Delegates a sub-task to another agent and returns its result.
+    /// This is a convenience wrapper around <see cref="SubAgentDelegator.DelegateAsync"/>.
+    /// 
+    /// The sub-agent executes within the current agent's orchestration cycle.
+    /// Its output is returned to this agent for incorporation into its own reasoning,
+    /// and is NOT automatically posted to the blackboard unless the sub-agent itself does so.
+    /// </summary>
+    /// <param name="targetAgentName">The name of the sub-agent to delegate to.</param>
+    /// <param name="taskPrompt">A description of the task for the sub-agent.</param>
+    /// <param name="blackboard">The interview blackboard.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A <see cref="SubAgentResult"/> with the sub-agent's output, or a failed result if no delegator is available.</returns>
+    protected async Task<SubAgentResult> DelegateToSubAgentAsync(
+        string targetAgentName,
+        string taskPrompt,
+        InterviewBlackboard blackboard,
+        CancellationToken cancellationToken = default)
+    {
+        if (Delegator == null)
+        {
+            Logger.LogWarning(
+                "Agent '{AgentName}' attempted to delegate to '{TargetAgent}' but no SubAgentDelegator is available. " +
+                "This typically means the agent was constructed outside of DI (e.g., in a unit test).",
+                Name, targetAgentName);
+
+            return SubAgentResult.Failed(
+                targetAgentName,
+                "SubAgentDelegator not available. Delegation requires DI-managed agent construction.",
+                0);
+        }
+
+        Logger.LogInformation(
+            "Agent '{AgentName}' delegating sub-task to '{TargetAgent}': {Task}",
+            Name, targetAgentName,
+            taskPrompt.Length > 100 ? taskPrompt[..100] + "..." : taskPrompt);
+
+        return await Delegator.DelegateAsync(
+            parentAgentName: Name,
+            targetAgentName: targetAgentName,
+            taskPrompt: taskPrompt,
+            blackboard: blackboard,
+            parentContext: null, // Top-level agents are at depth 0
+            cancellationToken: cancellationToken);
     }
 }
 

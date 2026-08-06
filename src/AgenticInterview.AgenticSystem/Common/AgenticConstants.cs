@@ -71,6 +71,19 @@ public static class AgenticConstants
     /// </summary>
     public const int BaseSessionRetryDelayMs = 5000;
 
+    // --- Sub-Agent Delegation ---
+    /// <summary>
+    /// Maximum nesting depth for sub-agent delegation.
+    /// 0 = top-level agent, 1 = sub-agent. Prevents runaway LLM call chains.
+    /// </summary>
+    public const int MaxSubAgentDepth = 1;
+
+    /// <summary>
+    /// Maximum time in seconds a sub-agent is allowed to execute before being cancelled.
+    /// Prevents a stuck sub-agent from blocking the parent indefinitely.
+    /// </summary>
+    public const int SubAgentTimeoutSeconds = 30;
+
     // --- Self-Correcting Loop Blackboard Keys ---
     /// <summary>
     /// Blackboard key prefix for tracking how many orchestration cycles a goal has been active.

@@ -23,6 +23,9 @@ public static class DependencyInjection
         // Register the Tool Resolver (singleton — maps agent card skills to MCP tools)
         services.AddSingleton<AgentToolResolver>();
 
+        // Register the Sub-Agent Delegator (scoped — needs access to the DI scope to resolve agents)
+        services.AddScoped<SubAgentDelegator>();
+
         // Register the Background Service for lifecycle management
         services.AddSingleton<InterviewBackgroundService>();
         services.AddHostedService(sp => sp.GetRequiredService<InterviewBackgroundService>());

@@ -50,6 +50,13 @@ public class AgentCard
     public bool SupportsStreaming { get; init; }
 
     /// <summary>
+    /// The agent card IDs that this agent is allowed to delegate sub-tasks to.
+    /// Acts as a guardrail preventing arbitrary agent-to-agent delegation.
+    /// An empty list means this agent cannot delegate to any sub-agents.
+    /// </summary>
+    public IReadOnlyList<string> CanDelegateTo { get; init; } = [];
+
+    /// <summary>
     /// Optional endpoint URL for the agent (used in distributed A2A scenarios).
     /// </summary>
     public string? EndpointUrl { get; init; }
