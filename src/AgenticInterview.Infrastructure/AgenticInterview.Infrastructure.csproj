@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\AgenticInterview.Application\AgenticInterview.Application.csproj" />
@@ -22,7 +22,7 @@
     <PackageReference Include="PdfPig" Version="0.1.14" />
     <PackageReference Include="QuestPDF" Version="2026.6.0" />
     <PackageReference Include="ScottPlot" Version="5.1.59" />
-    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.11" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
   </ItemGroup>
 
   <PropertyGroup>
