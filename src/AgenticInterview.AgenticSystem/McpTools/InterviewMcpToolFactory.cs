@@ -67,9 +67,8 @@ public static class InterviewMcpToolFactory
                 CreateRecordProctoringEventTool(logger, serviceProvider),
                 ["detect-malpractice"]),
 
-            new ToolDefinition(
-                CreateSearchResumeContextTool(logger, serviceProvider),
-                ["ask-technical-question", "behavioral-question", "live-summary"]),
+            // Note: search_resume_context has been replaced by MAF's TextSearchProvider
+            // wired into the agent harness pipeline (see BaseAgent.GetTextSearchProvider()).
 
             new ToolDefinition(
                 CreateSubmitFinalScoreTool(logger, serviceProvider),
@@ -162,31 +161,6 @@ public static class InterviewMcpToolFactory
             },
             "record_proctoring_event",
             "Records a proctoring violation event such as tab switching or copy-paste attempts.");
-    }
-
-    /// <summary>
-    /// Tool: search_resume_context — Searches the candidate's resume for relevant experience.
-    /// </summary>
-    private static AITool CreateSearchResumeContextTool(ILogger logger, IServiceProvider serviceProvider)
-    {
-        return AIFunctionFactory.Create(
-            async (string candidateId, string query) =>
-            {
-                logger.LogInformation("MCP Tool 'search_resume_context' invoked with candidateId: {CandidateId}, query: {Query}", candidateId, query);
-                
-                var ragService = serviceProvider.GetRequiredService<IResumeRagService>();
-                var results = await ragService.SearchCandidateExperienceAsync(candidateId, query);
-                
-                var resultList = results.ToList();
-                if (resultList.Count == 0)
-                {
-                    return "No relevant resume experience found for this query.";
-                }
-                
-                return string.Join("\n", resultList);
-            },
-            "search_resume_context",
-            "Searches the candidate's resume using RAG to find relevant experience for a given query.");
     }
 
     /// <summary>

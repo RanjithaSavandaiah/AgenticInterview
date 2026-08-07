@@ -8,6 +8,7 @@ using AgenticInterview.AgenticSystem.Core;
 using AgenticInterview.AgenticSystem.Guardrails;
 using AgenticInterview.AgenticSystem.Memory;
 using AgenticInterview.AgenticSystem.State;
+using AgenticInterview.Application.Abstractions;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
@@ -55,6 +56,14 @@ public abstract class BaseAgent : IAgent
     /// </summary>
     protected readonly SubAgentDelegator? Delegator;
 
+    /// <summary>
+    /// Optional resume RAG service for candidate-context retrieval.
+    /// When available, a MAF <see cref="TextSearchProvider"/> is wired into the agent harness
+    /// pipeline, replacing the manual search_resume_context MCP tool with the framework's
+    /// built-in RAG integration.
+    /// </summary>
+    protected readonly IResumeRagService? ResumeRagService;
+
     protected BaseAgent(
         string name,
         string goal,
@@ -74,6 +83,10 @@ public abstract class BaseAgent : IAgent
         MemoryStore = memoryStore;
         Guardrails = guardrails;
         Delegator = delegator;
+
+        // Resolve the resume RAG service from DI if available.
+        // This enables the TextSearchProvider integration in GetAgentOptions().
+        ResumeRagService = serviceProvider?.GetService(typeof(IResumeRagService)) as IResumeRagService;
 
         // Resolve per-agent tools via skill mapping if resolver is available.
         // This ensures each agent only gets the MCP tools matching its agent card skills.
@@ -122,6 +135,16 @@ public abstract class BaseAgent : IAgent
             providers.Add(new FileAccessProvider(fileStore));
         }
 
+        // Wire up MAF's TextSearchProvider for candidate resume RAG.
+        // This replaces the manual search_resume_context MCP tool with the framework's
+        // built-in RAG pipeline. Uses OnDemandFunctionCalling so the model decides when
+        // to search — the provider exposes a "search_candidate_resume" tool automatically.
+        var searchProvider = GetTextSearchProvider();
+        if (searchProvider != null)
+        {
+            providers.Add(searchProvider);
+        }
+
         return new ChatClientAgentOptions
         {
             Name = Name,
@@ -132,6 +155,41 @@ public abstract class BaseAgent : IAgent
             },
             AIContextProviders = providers
         };
+    }
+
+    /// <summary>
+    /// Creates a MAF <see cref="TextSearchProvider"/> that bridges the <see cref="IResumeRagService"/>
+    /// into the agent harness pipeline. Returns null if no RAG service is available.
+    ///
+    /// The provider uses <see cref="TextSearchProviderOptions.TextSearchBehavior.OnDemandFunctionCalling"/>
+    /// mode, which exposes a "search_candidate_resume" function tool that the model can invoke
+    /// when it needs candidate context — replacing the manual search_resume_context MCP tool.
+    /// </summary>
+    protected virtual TextSearchProvider? GetTextSearchProvider()
+    {
+        if (ResumeRagService == null)
+            return null;
+
+        return new TextSearchProvider(
+            async (query, cancellationToken) =>
+            {
+                var results = await ResumeRagService.SearchAllAsync(query, topK: 5, cancellationToken);
+                return results.Select(r => new TextSearchProvider.TextSearchResult
+                {
+                    Text = r.Text,
+                    SourceName = $"Resume: {r.CandidateId}",
+                    SourceLink = $"candidate://{r.CandidateId}"
+                });
+            },
+            new TextSearchProviderOptions
+            {
+                SearchTime = TextSearchProviderOptions.TextSearchBehavior.OnDemandFunctionCalling,
+                FunctionToolName = "search_candidate_resume",
+                FunctionToolDescription = "Searches the candidate's resume and experience data using RAG to find relevant context for a given query. Use this when you need to reference the candidate's background, skills, or past experience.",
+                ContextPrompt = "The following resume excerpts are relevant to the current context:",
+                CitationsPrompt = "When referencing candidate experience, cite the source."
+            }
+        );
     }
 
     /// <summary>

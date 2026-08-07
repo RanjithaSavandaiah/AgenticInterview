@@ -62,4 +62,34 @@ public class ResumeRagService : IResumeRagService
 
         return Task.FromResult(scoredChunks);
     }
+
+    public Task<IEnumerable<(string CandidateId, string Text, double Score)>> SearchAllAsync(string query, int topK = 5, CancellationToken cancellationToken = default)
+    {
+        var queryTerms = query.ToLowerInvariant()
+            .Split(new[] { ' ', ',', '?' }, StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length > 3)
+            .ToList();
+
+        if (queryTerms.Count == 0)
+        {
+            // No meaningful query terms — return first chunks from any candidate
+            var fallback = _candidateChunks
+                .SelectMany(kvp => kvp.Value.Take(topK).Select(chunk => (kvp.Key, chunk, 0.0)));
+            return Task.FromResult(fallback.Take(topK));
+        }
+
+        // Score chunks across ALL candidates
+        var results = _candidateChunks
+            .SelectMany(kvp => kvp.Value.Select(chunk =>
+            {
+                var lowerChunk = chunk.ToLowerInvariant();
+                double score = queryTerms.Sum(term => lowerChunk.Contains(term) ? 1.0 : 0.0) / queryTerms.Count;
+                return (CandidateId: kvp.Key, Text: chunk, Score: score);
+            }))
+            .Where(x => x.Score > 0)
+            .OrderByDescending(x => x.Score)
+            .Take(topK);
+
+        return Task.FromResult(results);
+    }
 }
