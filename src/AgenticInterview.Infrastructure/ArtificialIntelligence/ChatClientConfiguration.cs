@@ -57,7 +57,7 @@ public static class ChatClientConfiguration
                         };
                     })
                 .UseFunctionInvocation()
-                .Build();
+                .Build(sp);
         });
 
         return services;
