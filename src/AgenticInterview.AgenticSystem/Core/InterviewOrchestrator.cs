@@ -1,4 +1,9 @@
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using AgenticInterview.AgenticSystem.Agents;
 using AgenticInterview.AgenticSystem.AgentCards;
 using AgenticInterview.AgenticSystem.Blackboard;
@@ -14,13 +19,20 @@ namespace AgenticInterview.AgenticSystem.Core;
 /// <summary>
 /// The central orchestrator for the multi-agent interview system.
 /// Coordinates agent turn-taking, manages the blackboard lifecycle, and
-/// implements a goal-driven ReAct (Reason-Act) loop for autonomous agent execution.
-/// 
-/// The orchestrator:
+/// implements a phase-based workflow for autonomous agent execution.
+///
+/// The orchestrator models the interview as a directed graph of phases:
+/// <code>
+///   Intro → Technical → Behavioral → Evaluation → Closing
+///           ↑ Proctoring runs concurrently at every phase ↑
+/// </code>
+///
+/// Each phase is backed by a <see cref="PhaseExecutor"/> that groups the agents
+/// required for that stage. The orchestrator:
 /// 1. Tracks the current interview phase via <see cref="InterviewGoal"/>
-/// 2. Reasons about which agent(s) should act next based on blackboard state
-/// 3. Executes the selected agent(s) with full observability instrumentation
-/// 4. Advances goals when completion conditions are met
+/// 2. Delegates agent execution to the appropriate <see cref="PhaseExecutor"/>
+/// 3. Advances phases when completion conditions are met
+/// 4. Detects stalled phases and force-advances to prevent infinite loops
 /// </summary>
 public class InterviewOrchestrator
 {
@@ -31,7 +43,14 @@ public class InterviewOrchestrator
     private readonly ILogger<InterviewOrchestrator> _logger;
 
     /// <summary>
+    /// Phase executors keyed by goal ID. Each executor knows which agents to run
+    /// for its interview phase. Built once at construction time from the goal definitions.
+    /// </summary>
+    private readonly Dictionary<string, PhaseExecutor> _phaseExecutors;
+
+    /// <summary>
     /// Initializes the orchestrator with agents, registry, goals, and an LLM for reasoning.
+    /// Builds the phase executor graph from the goal definitions.
     /// </summary>
     public InterviewOrchestrator(
         IEnumerable<IAgent> agents,
@@ -44,18 +63,22 @@ public class InterviewOrchestrator
         _goals = DefaultInterviewGoals.GetAll();
         _chatClient = chatClient;
         _logger = logger;
+
+        // Build the phase executor graph: each goal maps to a PhaseExecutor
+        // that knows which agents to run for that interview stage.
+        _phaseExecutors = BuildPhaseExecutors();
     }
 
     /// <summary>
-    /// Runs a single orchestration cycle with goal-driven agent selection.
-    /// Instead of round-robin, the orchestrator reasons about which agents
-    /// should execute based on the current interview phase and blackboard state.
+    /// Runs a single orchestration cycle with phase-based agent selection.
+    /// Instead of round-robin, the orchestrator delegates to the <see cref="PhaseExecutor"/>
+    /// for the current interview phase, which runs only the agents required for that stage.
     /// </summary>
     public async Task RunCycleAsync(InterviewBlackboard blackboard, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Orchestrator starting cycle for session {SessionId}", blackboard.SessionId);
 
-        // Determine the current goal
+        // Determine the current goal/phase
         var currentGoal = GetCurrentGoal(blackboard);
         if (currentGoal != null)
         {
@@ -63,86 +86,20 @@ public class InterviewOrchestrator
             _logger.LogInformation("Current interview phase: {GoalName} ({GoalId})", currentGoal.Name, currentGoal.Id);
         }
 
-        // Get the agents that should execute in this cycle
-        var activeAgents = SelectActiveAgents(blackboard, currentGoal);
-
-        foreach (var agent in activeAgents)
+        // Delegate to the phase executor for the current goal
+        if (currentGoal != null && _phaseExecutors.TryGetValue(currentGoal.Id, out var executor))
         {
-            if (cancellationToken.IsCancellationRequested)
-                break;
-
-            // Observability: trace and measure each agent execution
-            using var activity = AgentMetrics.ActivitySource.StartActivity(
-                $"Agent.{agent.Name}",
-                ActivityKind.Internal,
-                parentContext: default,
-                tags: [
-                    new KeyValuePair<string, object?>("agent.name", agent.Name),
-                    new KeyValuePair<string, object?>("session.id", blackboard.SessionId.ToString())
-                ]);
-
-            var stopwatch = Stopwatch.StartNew();
-
-            // Self-correcting retry loop: retry failed agents with exponential backoff
-            for (int retryAttempt = 1; retryAttempt <= AgenticConstants.MaxAgentRetries; retryAttempt++)
-            {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
-
-                try
-                {
-                    _logger.LogInformation("Executing agent: {AgentName} (attempt {Attempt}/{MaxAttempts})",
-                        agent.Name, retryAttempt, AgenticConstants.MaxAgentRetries);
-                    AgentMetrics.AgentInvocations.Add(1,
-                        new KeyValuePair<string, object?>("agent.name", agent.Name));
-
-                    await agent.ExecuteAsync(blackboard, cancellationToken);
-
-                    stopwatch.Stop();
-                    AgentMetrics.AgentExecutionDuration.Record(stopwatch.Elapsed.TotalMilliseconds,
-                        new KeyValuePair<string, object?>("agent.name", agent.Name),
-                        new KeyValuePair<string, object?>("status", "success"));
-
-                    _logger.LogInformation("Agent {AgentName} completed in {ElapsedMs}ms.",
-                        agent.Name, stopwatch.Elapsed.TotalMilliseconds);
-                    break; // Success — exit retry loop
-                }
-                catch (OperationCanceledException)
-                {
-                    throw; // Don't retry cancellation
-                }
-                catch (Exception ex)
-                {
-                    stopwatch.Stop();
-                    AgentMetrics.AgentExecutionDuration.Record(stopwatch.Elapsed.TotalMilliseconds,
-                        new KeyValuePair<string, object?>("agent.name", agent.Name),
-                        new KeyValuePair<string, object?>("status", "error"));
-
-                    if (retryAttempt < AgenticConstants.MaxAgentRetries)
-                    {
-                        var backoffMs = (int)Math.Pow(2, retryAttempt - 1) * 1000; // 1s, 2s
-                        _logger.LogWarning(ex,
-                            "Agent {AgentName} failed on attempt {Attempt}/{MaxAttempts}. Retrying in {BackoffMs}ms.",
-                            agent.Name, retryAttempt, AgenticConstants.MaxAgentRetries, backoffMs);
-                        AgentMetrics.SelfCorrectionAttempts.Add(1,
-                            new KeyValuePair<string, object?>("agent.name", agent.Name),
-                            new KeyValuePair<string, object?>("attempt", retryAttempt));
-                        await Task.Delay(backoffMs, cancellationToken);
-                        stopwatch.Restart(); // Reset timer for retry
-                    }
-                    else
-                    {
-                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                        _logger.LogError(ex,
-                            "Agent {AgentName} exhausted all {MaxAttempts} retry attempts. Moving to next agent.",
-                            agent.Name, AgenticConstants.MaxAgentRetries);
-                        AgentMetrics.SelfCorrectionExhausted.Add(1,
-                            new KeyValuePair<string, object?>("agent.name", agent.Name));
-                        // Do not post the error to the blackboard, as it breaks the interview immersion
-                        // and deadlocks the conversation by changing the lastMessage.SourceAgent.
-                    }
-                }
-            }
+            await executor.ExecuteAsync(_agents, blackboard, cancellationToken);
+        }
+        else
+        {
+            // Fallback: no active goal or no executor — run all agents
+            _logger.LogInformation("No active phase — running all agents (fallback mode).");
+            var fallbackExecutor = new PhaseExecutor(
+                "Fallback",
+                _agents.Select(a => a.Name).ToList(),
+                logger: _logger);
+            await fallbackExecutor.ExecuteAsync(_agents, blackboard, cancellationToken);
         }
 
         // Check if current goal is completed and advance
@@ -188,6 +145,37 @@ public class InterviewOrchestrator
     }
 
     /// <summary>
+    /// Builds the phase executor graph from the goal definitions.
+    /// Each goal's <see cref="InterviewGoal.RequiredAgentIds"/> are resolved to agent names
+    /// via the <see cref="AgentCardRegistry"/> and wrapped in a <see cref="PhaseExecutor"/>.
+    /// </summary>
+    private Dictionary<string, PhaseExecutor> BuildPhaseExecutors()
+    {
+        var executors = new Dictionary<string, PhaseExecutor>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var goal in _goals)
+        {
+            // Resolve agent card IDs to agent names
+            var agentNames = goal.RequiredAgentIds
+                .Select(id => _agentCardRegistry.GetById(id))
+                .Where(c => c != null)
+                .Select(c => c!.Name)
+                .ToList();
+
+            executors[goal.Id] = new PhaseExecutor(
+                phaseName: goal.Name,
+                requiredAgentNames: agentNames,
+                alwaysActiveAgentNames: [AgenticConstants.ProctoringAgentName],
+                logger: _logger);
+
+            _logger.LogDebug("Built phase executor '{PhaseName}' with agents: [{Agents}]",
+                goal.Name, string.Join(", ", agentNames));
+        }
+
+        return executors;
+    }
+
+    /// <summary>
     /// Determines the current interview goal/phase based on blackboard state.
     /// Goals are checked in order; the first uncompleted goal is the current one.
     /// </summary>
@@ -202,42 +190,6 @@ public class InterviewOrchestrator
             }
         }
         return null; // All goals completed
-    }
-
-    /// <summary>
-    /// Selects which agents should be active for this cycle based on the current goal.
-    /// Falls back to all agents if no goal is active (defensive behavior).
-    /// </summary>
-    private IEnumerable<IAgent> SelectActiveAgents(InterviewBlackboard blackboard, InterviewGoal? currentGoal)
-    {
-        // Proctoring agent always runs regardless of phase (security is phase-independent)
-        var alwaysActiveAgents = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            AgenticConstants.ProctoringAgentName
-        };
-
-        if (currentGoal == null)
-        {
-            _logger.LogInformation("No active goal — running all agents (fallback mode).");
-            return _agents;
-        }
-
-        // Map agent card IDs to agent names for filtering
-        var requiredCards = currentGoal.RequiredAgentIds
-            .Select(id => _agentCardRegistry.GetById(id))
-            .Where(c => c != null)
-            .Select(c => c!.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var activeAgents = _agents.Where(a =>
-            requiredCards.Contains(a.Name) ||
-            alwaysActiveAgents.Contains(a.Name))
-            .ToList();
-
-        _logger.LogInformation("Goal '{GoalName}' selected {Count} agents: [{Agents}]",
-            currentGoal.Name, activeAgents.Count, string.Join(", ", activeAgents.Select(a => a.Name)));
-
-        return activeAgents;
     }
 
     /// <summary>

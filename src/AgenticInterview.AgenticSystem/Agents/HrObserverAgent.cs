@@ -54,16 +54,16 @@ You have access to tools. If you decide to use a tool, ensure you provide all re
     }
 
     /// <summary>
-    /// Override compaction with a much lower 12K token threshold.
+    /// Override compaction with a much smaller 16K context window.
     /// The HR observer only needs a summary of the full transcript — not deep reasoning.
-    /// Triggering compaction early saves tokens for this lightweight agent.
+    /// Using ContextWindowCompactionStrategy with a small window means tool results are
+    /// evicted at ~8K and hard truncation kicks in at ~12.8K tokens.
     /// </summary>
     protected override CompactionStrategy GetCompactionStrategy()
     {
-        return new SummarizationCompactionStrategy(
-            chatClient: ChatClient,
-            trigger: CompactionTriggers.TokensExceed(12_000),
-            minimumPreservedGroups: 1
+        return new ContextWindowCompactionStrategy(
+            maxContextWindowTokens: 16_000,
+            maxOutputTokens: 1_024
         );
     }
 

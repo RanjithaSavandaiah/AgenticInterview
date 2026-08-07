@@ -4,6 +4,7 @@ using AgenticInterview.AgenticSystem.AgentCards;
 using AgenticInterview.AgenticSystem.Core;
 using AgenticInterview.AgenticSystem.Blackboard;
 using AgenticInterview.AgenticSystem.Guardrails;
+using AgenticInterview.AgenticSystem.Memory;
 
 namespace AgenticInterview.AgenticSystem;
 
@@ -25,6 +26,13 @@ public static class DependencyInjection
 
         // Register the Sub-Agent Delegator (scoped — needs access to the DI scope to resolve agents)
         services.AddScoped<SubAgentDelegator>();
+
+        // Register the Blackboard Manager (singleton — manages per-session blackboard lifecycle)
+        services.AddSingleton<BlackboardManager>();
+
+        // Register the Conversation Memory Store (singleton — in-memory cross-agent context)
+        // This supplements the MAF FileAccessProvider with cross-agent memory retrieval.
+        services.AddSingleton<IConversationMemoryStore, ConversationMemoryStore>();
 
         // Register the Background Service for lifecycle management
         services.AddSingleton<InterviewBackgroundService>();

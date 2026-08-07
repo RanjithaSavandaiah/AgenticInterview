@@ -97,9 +97,31 @@ public abstract class BaseAgent : IAgent
     /// <summary>
     /// Returns the MAF harness configuration for this agent. Concrete agents can override
     /// this to customize instructions and tool configuration.
+    /// 
+    /// The default configuration includes:
+    /// - <see cref="CompactionProvider"/> with <see cref="ContextWindowCompactionStrategy"/> for
+    ///   automatic tool-result eviction and hard truncation within a single strategy
+    /// - <see cref="FileAccessProvider"/> for session-scoped file memory (replaces hand-rolled memory store)
     /// </summary>
     protected virtual ChatClientAgentOptions GetAgentOptions()
     {
+        var providers = new List<AIContextProvider>
+        {
+            // Context window management: ContextWindowCompactionStrategy is an all-in-one
+            // strategy that applies tool-result eviction at 50% capacity and hard truncation
+            // at 80% capacity — replacing the need for a manual composed pipeline.
+            new CompactionProvider(GetCompactionStrategy())
+        };
+
+        // Wire up FileAccessProvider for session-scoped file memory if a store path is available.
+        // This replaces the hand-rolled ConversationMemoryStore with MAF's built-in file access
+        // provider, which automatically exposes file_access_read_file / file_access_save_file tools.
+        var fileStore = GetFileStore();
+        if (fileStore != null)
+        {
+            providers.Add(new FileAccessProvider(fileStore));
+        }
+
         return new ChatClientAgentOptions
         {
             Name = Name,
@@ -108,10 +130,7 @@ public abstract class BaseAgent : IAgent
             {
                 Tools = Tools
             },
-            // Wire the compaction provider into the agent pipeline for automatic headroom management.
-            // Before every RunAsync call, the CompactionProvider checks if the conversation exceeds
-            // the token threshold and applies the compaction strategy (summarize or truncate).
-            AIContextProviders = [new CompactionProvider(GetCompactionStrategy())]
+            AIContextProviders = providers
         };
     }
 
@@ -119,17 +138,28 @@ public abstract class BaseAgent : IAgent
     /// Returns the compaction strategy for headroom management. Concrete agents can override
     /// this to customize when and how compaction occurs.
     /// 
-    /// Default: <see cref="SummarizationCompactionStrategy"/> that triggers when token count
-    /// exceeds 100,000 and preserves the last 2 message groups (most recent Q&amp;A pair),
-    /// summarizing everything older into a condensed summary message.
+    /// Default: <see cref="ContextWindowCompactionStrategy"/> with a 128K token context window
+    /// and 4K max output tokens. This all-in-one strategy handles:
+    /// - <b>Tool result eviction</b> at 50% capacity (~62K tokens) — collapses verbose tool
+    ///   call/result pairs into concise summaries
+    /// - <b>Hard truncation</b> at 80% capacity (~99K tokens) — removes oldest non-system
+    ///   message groups as a fail-safe
     /// </summary>
     protected virtual CompactionStrategy GetCompactionStrategy()
     {
-        return new SummarizationCompactionStrategy(
-            chatClient: ChatClient,
-            trigger: CompactionTriggers.TokensExceed(100_000),
-            minimumPreservedGroups: 2
+        return new ContextWindowCompactionStrategy(
+            maxContextWindowTokens: 128_000,
+            maxOutputTokens: 4_096
         );
+    }
+
+    /// <summary>
+    /// Returns the file store for session-scoped file memory. Concrete agents can override
+    /// this to customize the storage location. Returns null to disable file access.
+    /// </summary>
+    protected virtual AgentFileStore? GetFileStore()
+    {
+        return null; // Disabled by default; agents opt-in by overriding
     }
 
     /// <summary>
@@ -137,7 +167,10 @@ public abstract class BaseAgent : IAgent
     /// </summary>
     public async Task ExecuteAsync(InterviewBlackboard blackboard, CancellationToken cancellationToken = default)
     {
-        // Retrieve relevant memories for this agent's context
+        // Retrieve relevant memories for this agent's context.
+        // Memory retrieval is best effort enrichment the agent runs even if memory is unavailable.
+        // Note: The MAF FileAccessProvider (if configured) provides additional session scoped
+        // file memory automatically. This manual retrieval supplements it with cross agent context.
         var sessionId = blackboard.SessionId.ToString();
         var currentTranscript = blackboard.Get<string>(AgenticConstants.CurrentTranscriptKey) ?? string.Empty;
         
@@ -150,24 +183,12 @@ public abstract class BaseAgent : IAgent
             }
             catch (Exception ex)
             {
-                // Memory retrieval is best-effort enrichment — don't block agent execution
                 Logger.LogWarning(ex, "Failed to retrieve memories for agent {AgentName}. Proceeding without context.", Name);
             }
         }
 
         // Execute the agent's core logic
         await ExecuteCoreAsync(blackboard, relevantMemories, cancellationToken);
-
-        // Save the latest interaction as a memory entry
-        var updatedTranscript = blackboard.Get<string>(AgenticConstants.CurrentTranscriptKey) ?? string.Empty;
-        if (updatedTranscript.Length > currentTranscript.Length)
-        {
-            var newContent = updatedTranscript[currentTranscript.Length..].Trim();
-            if (!string.IsNullOrWhiteSpace(newContent) && newContent.Length > 20)
-            {
-                await MemoryStore.SaveMemoryAsync(sessionId, $"{Name}_{DateTime.UtcNow:HHmmss}", newContent);
-            }
-        }
     }
 
     /// <summary>
